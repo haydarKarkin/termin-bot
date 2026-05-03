@@ -58,6 +58,22 @@ async def get_free_dates() -> list[str]:
             await browser.close()
 
 
+async def _select_option_containing(page: Page, text: str):
+    """
+    Finds the first <select> that has an <option> containing `text` and selects it.
+    select_option(label=...) only accepts plain strings, not regex patterns.
+    """
+    for sel in await page.locator("select").all():
+        options = await sel.locator("option").all()
+        for opt in options:
+            opt_text = (await opt.inner_text()).strip()
+            if text.lower() in opt_text.lower():
+                await sel.select_option(label=opt_text)
+                print(f"  → selected option: {opt_text!r}")
+                return
+    raise ValueError(f"No <option> containing {text!r} found on this page.")
+
+
 async def _click_radio_label(page: Page, pattern: re.Pattern):
     """
     Clicks the <label> associated with a radio button whose label text matches
@@ -94,7 +110,7 @@ async def _fill_form(page: Page) -> list[str]:
 
     # ── Step 3 — Surname initial range ────────────────────────────────────
     print("[STEP 3] Selecting surname range")
-    await page.locator("select").select_option(label=re.compile("G.?M", re.I))
+    await _select_option_containing(page, "G-M")
     await _click_weiter(page)
 
     # ── Step 4 — Application already submitted? ───────────────────────────
@@ -104,7 +120,7 @@ async def _fill_form(page: Page) -> list[str]:
 
     # ── Step 5 — Country of origin ────────────────────────────────────────
     print("[STEP 5] Selecting country option")
-    await page.locator("select").select_option(label=re.compile("^nein$", re.I))
+    await _select_option_containing(page, "Nein")
     await _click_weiter(page)
 
     # ── Step 6 — Number of people ─────────────────────────────────────────
