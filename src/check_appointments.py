@@ -58,40 +58,58 @@ async def get_free_dates() -> list[str]:
             await browser.close()
 
 
+async def _click_radio_label(page: Page, pattern: re.Pattern):
+    """
+    Clicks the <label> associated with a radio button whose label text matches
+    the given pattern. Falls back to force-clicking the hidden input if no
+    visible label is found. terminland.de hides the actual <input> and styles
+    the <label> instead, so .check() fails with 'element is not visible'.
+    """
+    # Try clicking a visible label whose text matches
+    label = page.locator("label").filter(has_text=pattern).first
+    if await label.count():
+        await label.click()
+        return
+
+    # Fallback: find the hidden radio and force-click it
+    radio = page.get_by_role("radio", name=pattern).first
+    await radio.click(force=True)
+
+
 async def _fill_form(page: Page) -> list[str]:
     """Walks through every booking step and returns the free calendar dates."""
 
-    print(f"[STEP 0] Opening {BASE_URL}")
+    print("[STEP 0] Opening booking page")
     await page.goto(BASE_URL, wait_until="networkidle", timeout=30_000)
 
     # ── Step 1 — Location ─────────────────────────────────────────────────
-    print("[STEP 1] Selecting location: Ausländeramt")
-    await page.get_by_role("radio", name=re.compile("ausländeramt", re.I)).first.check()
+    print("[STEP 1] Selecting location")
+    await _click_radio_label(page, re.compile("ausländeramt", re.I))
     await _click_weiter(page)
 
     # ── Step 2 — Service type ─────────────────────────────────────────────
-    print("[STEP 2] Selecting service: Niederlassungserlaubnis")
-    await page.get_by_role("radio", name=re.compile("niederlassungserlaubnis", re.I)).first.check()
+    print("[STEP 2] Selecting service type")
+    await _click_radio_label(page, re.compile("niederlassungserlaubnis", re.I))
     await _click_weiter(page)
 
     # ── Step 3 — Surname initial range ────────────────────────────────────
-    print("[STEP 3] Selecting surname range: G-M")
+    print("[STEP 3] Selecting surname range")
     await page.locator("select").select_option(label=re.compile("G.?M", re.I))
     await _click_weiter(page)
 
     # ── Step 4 — Application already submitted? ───────────────────────────
-    print("[STEP 4] Selecting: application already submitted (Ja)")
-    await page.get_by_role("radio", name=re.compile("antrag liegt bereits", re.I)).first.check()
+    print("[STEP 4] Selecting application status")
+    await _click_radio_label(page, re.compile("antrag liegt bereits", re.I))
     await _click_weiter(page)
 
     # ── Step 5 — Country of origin ────────────────────────────────────────
-    print("[STEP 5] Selecting country option: Nein")
+    print("[STEP 5] Selecting country option")
     await page.locator("select").select_option(label=re.compile("^nein$", re.I))
     await _click_weiter(page)
 
     # ── Step 6 — Number of people ─────────────────────────────────────────
-    print("[STEP 6] Selecting: drei Personen")
-    await page.get_by_role("radio", name=re.compile("drei personen", re.I)).first.check()
+    print("[STEP 6] Selecting number of people")
+    await _click_radio_label(page, re.compile("drei personen", re.I))
     await _click_weiter(page)
 
     # ── Calendar ──────────────────────────────────────────────────────────
