@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Auslaenderamt — Appointment Monitor (Playwright edition)
+
+Navigates the terminland.de multi-step booking form using a real browser,
+then reads the calendar for free slots.
+"""
+
+import asyncio
+import json
+import os
+import re
+import requests
+from datetime import datetime, timedelta
+
+from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeout
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+BASE_URL: str = os.environ.get("TERMIN_URL", "").rstrip("/") + "/"
+
+if not os.environ.get("TERMIN_URL"):
+    raise EnvironmentError("TERMIN_URL secret is not set.")
+
+STATE_FILE = "last_state.json"
+TIMEOUT    = 15_000   # ms — max wait per element
+
+
+# ---------------------------------------------------------------------------
+# Browser automation
+# ---------------------------------------------------------------------------
+
+async def get_free_dates() -> list[str]:
+    """
+    Opens the booking site in a headless Chromium browser, fills in every
+    form step, and returns a sorted list of free dates (ISO-8601 strings).
+    """
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page    = await browser.new_page()
+
+        # Capture console errors for debugging
+        page.on("console", lambda m: print(f"  [browser] {m.text}") if m.type == "error" else None)
+
+        try:
+            return await _fill_form(page)
+        except PWTimeout as exc:
+            print(f"[ERROR] Timed out: {exc}")
+            await page.screenshot(path="debug_timeout.png", full_page=True)
+            return []
+        except Exception as exc:
+            print(f"[ERROR] Unexpected error: {exc}")
+            await page.screenshot(path="debug_error.png", full_page=True)
+            return []
+        finally:
+            await browser.close()
+
+
+async def _fill_form(page: Page) -> list[str]:
+    """Walks through every booking step and returns the free calendar dates."""
+
+    print(f"[STEP 0] Opening {BASE_URL}")
+    await page.goto(BASE_URL, wait_until="networkidle", timeout=30_000)
+
+    # ── Step 1 — Location ─────────────────────────────────────────────────
+    print("[STEP 1] Selecting location: Ausländeramt")
+    await page.get_by_role("radio", name=re.compile("ausländeramt", re.I)).first.check()
+    await _click_weiter(page)
+
+    # ── Step 2 — Service type ─────────────────────────────────────────────
+    print("[STEP 2] Selecting service: Niederlassungserlaubnis")
+    await page.get_by_role("radio", name=re.compile("niederlassungserlaubnis", re.I)).first.check()
+    await _click_weiter(page)
+
+    # ── Step 3 — Surname initial range ────────────────────────────────────
+    print("[STEP 3] Selecting surname range: G-M")
+    await page.locator("select").select_option(label=re.compile("G.?M", re.I))
+    await _click_weiter(page)
+
+    # ── Step 4 — Application already submitted? ───────────────────────────
+    print("[STEP 4] Selecting: application already submitted (Ja)")
+    await page.get_by_role("radio", name=re.compile("antrag liegt bereits", re.I)).first.check()
+    await _click_weiter(page)
+
+    # ── Step 5 — Country of origin ────────────────────────────────────────
+    print("[STEP 5] Selecting country option: Nein")
+    await page.locator("select").select_option(label=re.compile("^nein$", re.I))
+    await _click_weiter(page)
+
+    # ── Step 6 — Number of people ─────────────────────────────────────────
+    print("[STEP 6] Selecting: drei Personen")
+    await page.get_by_role("radio", name=re.compile("drei personen", re.I)).first.check()
+    await _click_weiter(page)
+
+    # ── Calendar ──────────────────────────────────────────────────────────
+    print("[STEP 7] Waiting for calendar…")
+    await page.wait_for_selector(".date-picker, td.free, [id^='cell']", timeout=TIMEOUT)
+    await page.screenshot(path="debug_calendar.png", full_page=True)
+
+    return await _parse_calendar(page)
+
+
+async def _click_weiter(page: Page):
+    """Clicks the 'Weiter' (next) button and waits for navigation to settle."""
+    btn = page.get_by_role("button", name=re.compile("weiter|next|continue|fortfahren", re.I))
+    await btn.first.click()
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
+    print(f"  → now at: {page.url}")
+
+
+async def _parse_calendar(page: Page) -> list[str]:
+    """
+    Reads all calendar cells that carry 'freie Termine vorhanden' in their
+    aria-label and returns their dates as sorted ISO-8601 strings.
+
+    Expected HTML:
+        <td class="free day"
+            aria-label="Donnerstag, 08.10.2026 - freie Termine vorhanden">8</td>
+    """
+    cells = await page.locator("td.free").all()
+    free_dates: list[str] = []
+
+    for cell in cells:
+        label = await cell.get_attribute("aria-label") or ""
+        match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", label)
+        if match:
+            day, month, year = match.group(1), match.group(2), match.group(3)
+            iso = f"{year}-{month}-{day}"
+            free_dates.append(iso)
+            print(f"  [FREE] {iso}  — {label[:70]}")
+
+    free_dates.sort()
+    print(f"[RESULT] {len(free_dates)} free date(s) found.")
+    return free_dates
+
+
+# ---------------------------------------------------------------------------
+# State management
+# ---------------------------------------------------------------------------
+
+def load_state() -> dict:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state: dict):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def should_notify(new: dict, old: dict) -> bool:
+    if not new.get("free_dates"):
+        return False
+    if not old:
+        return True
+    if new.get("first_available") != old.get("first_available"):
+        return True
+    last = old.get("last_notified")
+    if last:
+        age = datetime.utcnow() - datetime.fromisoformat(last)
+        if age > timedelta(hours=24):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def send_telegram(data: dict):
+    token, chat_id = os.environ.get("TELEGRAM_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("[NOTIFY] Telegram skipped — token / chat_id not set.")
+        return
+
+    first   = data.get("first_available") or "Unknown"
+    checked = data["checked_at"][:16].replace("T", " ")
+    dates   = " | ".join(data["free_dates"][:10])
+
+    text = (
+        "📅 <b>Appointment Available — Auslaenderamt!</b>\n\n"
+        f"🕐 Checked: {checked} UTC\n"
+        f"📅 First available: <b>{first}</b>\n"
+        f"⏰ Free dates: {dates}\n\n"
+        f"🔗 <a href='{BASE_URL}'>Book now</a>"
+    )
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        print(f"[NOTIFY] Telegram → {chat_id}")
+    except Exception as e:
+        print(f"[NOTIFY] Telegram failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    print("=" * 60)
+    print(f"Termin Bot  |  {datetime.utcnow().isoformat()} UTC")
+    print(f"Target: {BASE_URL}")
+    print("=" * 60)
+
+    old = load_state()
+
+    free_dates = asyncio.run(get_free_dates())
+
+    new = {
+        "checked_at":     datetime.utcnow().isoformat(),
+        "url":            BASE_URL,
+        "free_dates":     free_dates,
+        "first_available": free_dates[0] if free_dates else None,
+    }
+
+    if should_notify(new, old):
+        print("\n--- Sending notifications ---")
+        send_telegram(new)
+        new["last_notified"] = datetime.utcnow().isoformat()
+    else:
+        reason = "no free dates" if not free_dates else "no change since last run"
+        print(f"\n[SKIP] No notification — {reason}.")
+        if old.get("last_notified"):
+            new["last_notified"] = old["last_notified"]
+
+    save_state(new)
+    print("\n[DONE]")
+
+
+if __name__ == "__main__":
+    main()
