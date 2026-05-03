@@ -76,18 +76,17 @@ async def _select_option_containing(page: Page, text: str):
 
 async def _click_radio_label(page: Page, pattern: re.Pattern):
     """
-    Clicks the <label> associated with a radio button whose label text matches
-    the given pattern. Falls back to force-clicking the hidden input if no
-    visible label is found. terminland.de hides the actual <input> and styles
-    the <label> instead, so .check() fails with 'element is not visible'.
+    Clicks the <label> associated with a matching radio button.
+    Uses force=True throughout because terminland.de hides the actual <input>
+    and sometimes renders labels outside the visible viewport.
     """
-    # Try clicking a visible label whose text matches
+    # Try clicking a matching label first
     label = page.locator("label").filter(has_text=pattern).first
     if await label.count():
-        await label.click()
+        await label.click(force=True)
         return
 
-    # Fallback: find the hidden radio and force-click it
+    # Fallback: force-click the hidden radio input directly
     radio = page.get_by_role("radio", name=pattern).first
     await radio.click(force=True)
 
