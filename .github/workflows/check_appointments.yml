@@ -1,0 +1,86 @@
+name: Appointment Check
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # Every hour
+
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: "Send notification even if nothing changed (for testing)"
+        required: false
+        default: "false"
+        type: boolean
+
+jobs:
+  check:
+    name: Check for available appointments
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # Playwright needs its own browser binaries — only Chromium is needed
+      - name: Install Chromium
+        run: playwright install chromium --with-deps
+
+      # Restore the state saved by the previous run
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: last_state.json
+          key: termin-state-${{ github.run_id }}
+          restore-keys: |
+            termin-state-
+
+      - name: Check appointments
+        env:
+          TERMIN_URL: ${{ secrets.TERMIN_URL }}
+
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          FORCE_NOTIFY: ${{ github.event.inputs.force_notify || 'false' }}
+
+        run: |
+          cd src
+          python check_appointments.py
+
+      - name: Save state cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: last_state.json
+          key: termin-state-${{ github.run_id }}
+
+      # Upload screenshots and the calendar snapshot on failure
+      - name: Upload debug screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_id }}
+          path: |
+            src/debug_*.png
+            src/debug_*.html
+          retention-days: 3
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "### Appointment Check — $(date -u '+%Y-%m-%d %H:%M') UTC" >> $GITHUB_STEP_SUMMARY
+          if [ -f last_state.json ]; then
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat last_state.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
