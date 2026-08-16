@@ -1,5 +1,7 @@
 # termin-bot
 
+[![Appointment Check](https://github.com/haydarKarkin/termin-bot/actions/workflows/check_appointments.yml/badge.svg?branch=main)](https://github.com/haydarKarkin/termin-bot/actions/workflows/check_appointments.yml)
+
 A GitHub Actions workflow that periodically checks a web page and sends a Telegram notification when a change is detected.
 
 ## Setup
