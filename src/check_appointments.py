@@ -109,7 +109,7 @@ async def _fill_form(page: Page) -> list[str]:
 
     # ── Step 3 — Surname initial range ────────────────────────────────────
     print("[STEP 3] Selecting surname range")
-    await _select_option_containing(page, "G-M")
+    await _select_option_containing(page, os.environ["TERMIN_OPTION"])
     await _click_weiter(page)
 
     # ── Step 4 — Application already submitted? ───────────────────────────
@@ -124,7 +124,7 @@ async def _fill_form(page: Page) -> list[str]:
 
     # ── Step 6 — Number of people ─────────────────────────────────────────
     print("[STEP 6] Selecting number of people")
-    await _click_radio_label(page, re.compile("drei personen", re.I))
+    await _click_radio_label(page, re.compile(re.escape(os.environ["TERMIN_PERSONS"]), re.I))
     await _click_weiter(page)
 
     # ── Calendar ──────────────────────────────────────────────────────────
