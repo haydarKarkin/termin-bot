@@ -47,6 +47,8 @@ jobs:
       - name: Check appointments
         env:
           TERMIN_URL: ${{ secrets.TERMIN_URL }}
+          TERMIN_OPTION: ${{ secrets.TERMIN_OPTION }}
+          TERMIN_PERSONS: ${{ secrets.TERMIN_PERSONS }}
 
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
